@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Live2D 雙向語音對話助手</title>
+    <!-- Live2D Cubism Core & PixiJS Legacy & Pixi Live2D Display CDN -->
+    <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js-legacy@6.5.9/dist/browser/pixi-legacy.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border-color: #334155;
+            --success: #22c55e;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            transition: background-color 0.4s ease;
+        }
+
+        .container {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 28px;
+            width: 100%;
+            max-width: 600px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        h1 {
+            font-size: 1.4rem;
+            margin-top: 0;
+            margin-bottom: 16px;
+            text-align: center;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        /* --- Live2D Avatar Stage --- */
+        .avatar-stage {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(circle, #312e81 0%, #0f172a 80%);
+            border: 2px solid #4f46e5;
+            border-radius: 16px;
+            padding: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.25);
+            position: relative;
+            height: 280px;
+            overflow: hidden;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #live2dCanvas {
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+
+        .avatar-badge {
+            position: absolute;
+            bottom: 12px;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            background-color: #334155;
+            color: #94a3b8;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+            z-index: 10;
+        }
+
+        .avatar-badge.idle { background-color: #334155; color: #cbd5e1; }
+        .avatar-badge.listening { background-color: #0284c7; color: #e0f2fe; animation: pulse 1.5s infinite; }
+        .avatar-badge.thinking { background-color: #d97706; color: #fef3c7; animation: pulse 1s infinite; }
+        .avatar-badge.speaking { background-color: #16a34a; color: #dcfce7; }
+
+        .fullscreen-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: rgba(15, 23, 42, 0.6);
+            color: #e2e8f0;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 20px;
+            padding: 5px 12px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            backdrop-filter: blur(8px);
+            transition: all 0.2s ease;
+            z-index: 120;
+        }
+
+        .fullscreen-btn:hover {
+            background: rgba(99, 102, 241, 0.8);
+            color: #ffffff;
+            transform: scale(1.05);
+        }
+
+        /* 全螢幕模式 */
+        body.fullscreen-active {
+            padding: 0;
+            overflow: hidden;
+            background-color: #030712;
+        }
+
+        body.fullscreen-active .container {
+            max-width: 100vw;
+            width: 100vw;
+            height: 100vh;
+            border-radius: 0;
+            border: none;
+            padding: 0;
+            background: transparent;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        body.fullscreen-active h1,
+        body.fullscreen-active .form-group,
+        body.fullscreen-active .button-group,
+        body.fullscreen-active .log-box {
+            display: none !important;
+        }
+
+        body.fullscreen-active .avatar-stage {
+            width: 100vw;
+            height: 100vh;
+            border: none;
+            border-radius: 0;
+            margin: 0;
+            background: radial-gradient(circle at center, #1e1b4b 0%, #030712 85%);
+        }
+
+        body.fullscreen-active .status-box {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(99, 102, 241, 0.35);
+            border-radius: 30px;
+            padding: 10px 24px;
+            z-index: 100;
+        }
+
+        .form-group {
+            margin-bottom: 14px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            color: #cbd5e1;
+        }
+
+        .checkbox-label input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--primary);
+            cursor: pointer;
+        }
+
+        input[type="text"], input[type="password"], select {
+            width: 100%;
+            padding: 9px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background-color: #0f172a;
+            color: var(--text-main);
+            font-size: 0.9rem;
+            box-sizing: border-box;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input[type="text"]:focus, input[type="password"]:focus, select:focus {
+            border-color: var(--primary);
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 18px;
+        }
+
+        button {
+            flex: 1;
+            padding: 11px 18px;
+            border-radius: 8px;
+            border: none;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s;
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        #startButton {
+            background-color: var(--primary);
+            color: white;
+        }
+
+        #startButton:hover {
+            background-color: var(--primary-hover);
+        }
+
+        #stopButton {
+            background-color: var(--danger);
+            color: white;
+        }
+
+        #stopButton:hover {
+            background-color: var(--danger-hover);
+        }
+
+        #stopButton:disabled {
+            background-color: #475569;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .status-box {
+            margin-top: 16px;
+            padding: 12px;
+            border-radius: 8px;
+            background-color: #0f172a;
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #64748b;
+            flex-shrink: 0;
+        }
+
+        .status-indicator.connecting {
+            background-color: #eab308;
+            animation: pulse 1.5s infinite;
+        }
+
+        .status-indicator.connected {
+            background-color: var(--success);
+        }
+
+        .status-indicator.error {
+            background-color: var(--danger);
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.4; }
+            50% { opacity: 1; }
+            100% { opacity: 0.4; }
+        }
+
+        .status-text {
+            font-size: 0.85rem;
+            color: var(--text-main);
+            word-break: break-word;
+        }
+
+        .log-box {
+            margin-top: 14px;
+            background-color: #090d16;
+            border-radius: 8px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 0.78rem;
+            color: #a7f3d0;
+            max-height: 140px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            white-space: pre-wrap;
+        }
+
+        .log-entry {
+            margin-bottom: 3px;
+        }
+        .log-entry.error { color: #f87171; }
+        .log-entry.info { color: #60a5fa; }
+        .log-entry.success { color: #4ade80; }
+
+        .mode-tip {
+            font-size: 0.78rem;
+            color: #fbbf24;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎭 Gemini Live2D 語音 VTuber</h1>
+
+        <!-- Live2D 舞台 Canvas -->
+        <div id="avatarStage" class="avatar-stage">
+            <button id="toggleFullscreenBtn" class="fullscreen-btn">🖥️ 獨佔畫面 (Esc結束)</button>
+            <canvas id="live2dCanvas"></canvas>
+            <div id="avatarStatusBadge" class="avatar-badge idle">Live2D 待機中 (IDLE)</div>
+        </div>
+
+        <div class="form-group">
+            <label for="live2dModelSelect">Live2D 模型選擇：</label>
+            <select id="live2dModelSelect">
+                <option value="https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display@master/test/assets/haru/haru_greeter_t03.model3.json" selected>Haru 晴 (Cubism 4 典雅女高中生 🌸)</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="autoFullscreen" checked>
+                <span>開始對話時自動切換為獨佔全螢幕 Live2D 畫面</span>
+            </label>
+        </div>
+
+        <div class="form-group">
+            <label for="apiKey">Google AI Studio API Key：</label>
+            <input type="password" id="apiKey" value="" placeholder="請輸入 API Key">
+        </div>
+
+        <div class="form-group">
+            <label for="modeSelect">通訊架構模式 (Mode)：</label>
+            <select id="modeSelect">
+                <option value="rest" selected>REST 智能語音對話 (100% 免費版支援，推薦 ✅)</option>
+                <option value="websocket">WebSocket Live 雙向串流 (需伺服器開放 bidi 權限)</option>
+            </select>
+            <div id="modeTip" class="mode-tip">💡 免費 API Key 推薦選「REST 智能語音對話」，避開 1008 bidi 權限限制並擁有 Live2D 動態對嘴！</div>
+        </div>
+
+        <div class="form-group">
+            <label for="apiVersionSelect">API 版本 (Version)：</label>
+            <select id="apiVersionSelect">
+                <option value="v1beta" selected>v1beta (標準建議)</option>
+                <option value="v1alpha">v1alpha (實驗版本)</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="modelSelect">Gemini 模型 (Model)：</label>
+            <select id="modelSelect">
+                <option value="gemini-3.6-flash" selected>gemini-3.6-flash (全方位協助 - 推薦 ✅)</option>
+                <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (回覆最快)</option>
+                <option value="gemini-3.1-pro">gemini-3.1-pro (進階思考)</option>
+                <option value="gemini-2.0-flash-exp">gemini-2.0-flash-exp (需 Live 權限)</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="systemPrompt">VTuber 人設與說話風格 (System Prompt)：</label>
+            <input type="text" id="systemPrompt" value="你是一位可愛元氣的 Live2D VTuber。請用繁體中文回答，說話要簡潔生動、直奔主題、絕不廢話，每次回答控制在一到兩句話 (30字以內)！" placeholder="請設定 Gemini 人設或說話規範">
+        </div>
+
+        <div class="button-group">
+            <button id="startButton">開始 Live2D 語音對話</button>
+            <button id="stopButton" disabled>中斷 / 停止對話</button>
+        </div>
+
+        <div class="status-box">
+            <div id="statusIndicator" class="status-indicator"></div>
+            <div id="statusText" class="status-text">狀態：尚未連線</div>
+        </div>
+
+        <div id="logBox" class="log-box">
+            <div class="log-entry info">[系統] 準備就緒。點擊「開始 Live2D 語音對話」後即可對麥克風說話！</div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let audioContext = null;
+        let recordingContext = null;
+        let stream = null;
+        let processor = null;
+        let recognition = null;
+        let isListeningRest = false;
+        let isSetupReady = false;
+        let live2dLipSyncTimer = null;
+
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const statusText = document.getElementById('statusText');
+        const logBox = document.getElementById('logBox');
+        const modeSelect = document.getElementById('modeSelect');
+        const toggleFullscreenBtn = document.getElementById('toggleFullscreenBtn');
+        const autoFullscreenCheckbox = document.getElementById('autoFullscreen');
+        const live2dModelSelect = document.getElementById('live2dModelSelect');
+        const avatarStatusBadge = document.getElementById('avatarStatusBadge');
+
+        // --- PixiJS & Live2D Engine Setup ---
+        let app = null;
+        let live2dModel = null;
+        let currentAvatarState = 'idle';
+
+        function initPixiApp() {
+            const canvas = document.getElementById('live2dCanvas');
+            const stageDiv = document.getElementById('avatarStage');
+
+            // 支援 WebGL 與 2D Canvas 自動降級，解決無顯示卡/虛擬機器環境錯誤
+            app = new PIXI.Application({
+                view: canvas,
+                transparent: true,
+                autoStart: true,
+                width: stageDiv.clientWidth,
+                height: stageDiv.clientHeight,
+                forceCanvas: false
+            });
+
+            // 監聽視窗縮放
+            window.addEventListener('resize', () => {
+                if (app && stageDiv) {
+                    app.renderer.resize(stageDiv.clientWidth, stageDiv.clientHeight);
+                    if (live2dModel) {
+                        centerLive2DModel(live2dModel);
+                    }
+                }
+            });
+
+            // 滑鼠移動追蹤眼睛
+            stageDiv.addEventListener('pointermove', (e) => {
+                if (live2dModel) {
+                    const rect = stageDiv.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    live2dModel.focus(x, y);
+                }
+            });
+
+            // 支援滑鼠滾輪即時微調 Live2D 縮放大小
+            stageDiv.addEventListener('wheel', (e) => {
+                if (!live2dModel) return;
+                e.preventDefault();
+                const factor = e.deltaY < 0 ? 1.05 : 0.95;
+                live2dModel.scale.x *= factor;
+                live2dModel.scale.y *= factor;
+            }, { passive: false });
+        }
+
+        async function loadLive2DModel(modelUrl) {
+            if (!app) initPixiApp();
+
+            log(`正在載入 Live2D 模型 (${modelUrl.split('/').slice(-2).join('/')})...`, 'info');
+            setAvatarState('thinking');
+
+            if (live2dModel) {
+                app.stage.removeChild(live2dModel);
+                live2dModel.destroy();
+                live2dModel = null;
+            }
+
+            try {
+                live2dModel = await PIXI.live2d.Live2DModel.from(modelUrl);
+                app.stage.addChild(live2dModel);
+                centerLive2DModel(live2dModel);
+
+                // 點擊觸發動作
+                live2dModel.on('pointertap', () => {
+                    live2dModel.motion('TapBody');
+                });
+
+                log('Live2D 模型載入成功！', 'success');
+                setAvatarState('idle');
+            } catch (err) {
+                console.error('Live2D 載入失敗:', err);
+                log(`Live2D 模型載入失敗 (${err.message})`, 'error');
+                setAvatarState('idle');
+            }
+        }
+
+        function centerLive2DModel(model) {
+            if (!model || !app) return;
+
+            // 先重置縮放比例為 1, 1 獲取模型的原始基礎尺寸
+            model.scale.set(1, 1);
+            model.anchor.set(0.5, 0.5);
+
+            const baseW = model.width || 1000;
+            const baseH = model.height || 1000;
+
+            const isFullscreen = document.body.classList.contains('fullscreen-active');
+            
+            // 全螢幕時目標高度佔畫面的 75%，避免拉太高超出畫面
+            const targetH = app.renderer.height * (isFullscreen ? 0.72 : 0.82);
+            const fitScale = targetH / baseH;
+
+            model.scale.set(fitScale, fitScale);
+
+            // X 軸置中，Y 軸精準定位使頭部與上半身完整對齊畫面中心
+            model.x = app.renderer.width / 2;
+            model.y = (app.renderer.height / 2) + (targetH * 0.12);
+        }
+
+        live2dModelSelect.addEventListener('change', () => {
+            loadLive2DModel(live2dModelSelect.value);
+        });
+
+        // 獨佔全螢幕切換函數
+        function toggleFullscreen(forceState = null) {
+            const isFull = forceState !== null ? forceState : !document.body.classList.contains('fullscreen-active');
+            if (isFull) {
+                document.body.classList.add('fullscreen-active');
+                toggleFullscreenBtn.innerText = '⚙️ 退出獨佔 (Esc)';
+            } else {
+                document.body.classList.remove('fullscreen-active');
+                toggleFullscreenBtn.innerText = '🖥️ 獨佔畫面';
+            }
+            
+            // 延遲更新尺寸確保 Canvas DOM 縮放完成
+            setTimeout(() => {
+                if (app) {
+                    const stageDiv = document.getElementById('avatarStage');
+                    app.renderer.resize(stageDiv.clientWidth, stageDiv.clientHeight);
+                    if (live2dModel) centerLive2DModel(live2dModel);
+                }
+            }, 100);
+            setTimeout(() => {
+                if (app) {
+                    const stageDiv = document.getElementById('avatarStage');
+                    app.renderer.resize(stageDiv.clientWidth, stageDiv.clientHeight);
+                    if (live2dModel) centerLive2DModel(live2dModel);
+                }
+            }, 350);
+        }
+
+        toggleFullscreenBtn.addEventListener('click', () => toggleFullscreen());
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && document.body.classList.contains('fullscreen-active')) {
+                toggleFullscreen(false);
+            }
+        });
+
+        function setAvatarState(state) {
+            currentAvatarState = state;
+            avatarStatusBadge.className = `avatar-badge ${state}`;
+
+            switch(state) {
+                case 'idle':
+                    avatarStatusBadge.innerText = 'Live2D 待機中 (IDLE)';
+                    stopLive2DLipSync();
+                    break;
+                case 'listening':
+                    avatarStatusBadge.innerText = 'Live2D 聆聽中 (LISTENING 👂)';
+                    stopLive2DLipSync();
+                    break;
+                case 'thinking':
+                    avatarStatusBadge.innerText = 'Live2D 思考中 (THINKING 🤔)';
+                    stopLive2DLipSync();
+                    break;
+                case 'speaking':
+                    avatarStatusBadge.innerText = 'Live2D 說話中 (SPEAKING 🗣️)';
+                    startLive2DLipSync();
+                    break;
+            }
+        }
+
+        // Live2D 即時動態對嘴 (Live2D Lip-Sync)
+        function startLive2DLipSync() {
+            stopLive2DLipSync();
+            let phase = 0;
+            live2dLipSyncTimer = setInterval(() => {
+                if (!live2dModel || !live2dModel.internalModel) return;
+                phase += 0.45;
+                const openVal = Math.abs(Math.sin(phase));
+                if (live2dModel.internalModel.coreModel) {
+                    live2dModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', openVal);
+                }
+            }, 60);
+        }
+
+        function stopLive2DLipSync() {
+            if (live2dLipSyncTimer) {
+                clearInterval(live2dLipSyncTimer);
+                live2dLipSyncTimer = null;
+            }
+            if (live2dModel && live2dModel.internalModel && live2dModel.internalModel.coreModel) {
+                live2dModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', 0);
+            }
+        }
+
+        // --- Helpers ---
+        function log(msg, type = 'normal') {
+            const div = document.createElement('div');
+            div.className = `log-entry ${type}`;
+            const time = new Date().toLocaleTimeString();
+            div.innerText = `[${time}] ${msg}`;
+            logBox.appendChild(div);
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        function setStatus(text, state) {
+            statusText.innerText = `狀態：${text}`;
+            statusIndicator.className = 'status-indicator';
+            if (state) {
+                statusIndicator.classList.add(state);
+            }
+        }
+
+        modeSelect.addEventListener('change', () => {
+            const tip = document.getElementById('modeTip');
+            if (modeSelect.value === 'rest') {
+                tip.innerText = '💡 免費 API Key 推薦選「REST 智能語音對話」，避開 1008 bidi 權限限制並擁有 Live2D 動態對嘴！';
+            } else {
+                tip.innerText = '⚠️ WebSocket 模式需要您的 GCP/API Key 具有 bidiGenerateContent 即時雙向存取權限。';
+            }
+        });
+
+        window.addEventListener('load', () => {
+            loadLive2DModel(live2dModelSelect.value);
+        });
+
+        startButton.addEventListener('click', async () => {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const modelName = document.getElementById('modelSelect').value;
+            const apiVersionEl = document.getElementById('apiVersionSelect');
+            const apiVersion = apiVersionEl ? apiVersionEl.value : 'v1beta';
+            const mode = modeSelect.value;
+
+            if (!apiKey) {
+                alert('請輸入有效的 Google AI Studio API Key！');
+                return;
+            }
+
+            startButton.disabled = true;
+            stopButton.disabled = false;
+
+            if (autoFullscreenCheckbox.checked) {
+                toggleFullscreen(true);
+            }
+
+            if (mode === 'rest') {
+                startRestVoiceConversation(apiKey, modelName, apiVersion);
+            } else {
+                startWebSocketConversation(apiKey, modelName, apiVersion);
+            }
+        });
+
+        stopButton.addEventListener('click', () => {
+            log('使用者結束對話', 'info');
+            stopSession();
+        });
+
+        // --- REST 模式 ---
+        function startRestVoiceConversation(apiKey, modelName, apiVersion) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                alert('您的瀏覽器不支援語音辨識，請使用 Chrome 瀏覽器！');
+                stopSession();
+                return;
+            }
+
+            setStatus('麥克風聆聽中，請說話...', 'connected');
+            setAvatarState('listening');
+            log('已啟動 REST 語音對話模式，請直接說話...', 'success');
+
+            recognition = new SpeechRecognition();
+            recognition.lang = 'zh-TW';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            isListeningRest = true;
+
+            recognition.onresult = async (event) => {
+                const userSpeech = event.results[0][0].transcript;
+                log(`[您說] ${userSpeech}`, 'info');
+                setStatus('Gemini 思考與回答中...', 'connecting');
+                setAvatarState('thinking');
+
+                try {
+                    await sendToGeminiRest(apiKey, modelName, apiVersion, userSpeech);
+                } catch (err) {
+                    log(`Gemini API 請求錯誤: ${err.message}`, 'error');
+                    setStatus('錯誤發生的對話', 'error');
+                    setAvatarState('idle');
+                }
+
+                if (isListeningRest) {
+                    setStatus('聆聽中，請繼續說話...', 'connected');
+                    setAvatarState('listening');
+                    try { recognition.start(); } catch(e){}
+                }
+            };
+
+            recognition.onerror = (event) => {
+                if (event.error !== 'no-speech') {
+                    log(`語音辨識提示: ${event.error}`, 'info');
+                }
+                if (isListeningRest) {
+                    setTimeout(() => {
+                        try { recognition.start(); } catch(e){}
+                    }, 1000);
+                }
+            };
+
+            recognition.onend = () => {
+                if (isListeningRest && currentAvatarState !== 'speaking' && currentAvatarState !== 'thinking') {
+                    try { recognition.start(); } catch(e){}
+                }
+            };
+
+            recognition.start();
+        }
+
+        async function sendToGeminiRest(apiKey, modelName, apiVersion, textInput) {
+            const cleanModel = modelName.replace(/^models\//, '');
+            const url = `https://generativelanguage.googleapis.com/${apiVersion}/models/${cleanModel}:generateContent?key=${apiKey}`;
+            const systemPrompt = document.getElementById('systemPrompt').value.trim();
+
+            const requestBody = {
+                contents: [{
+                    parts: [{ text: textInput }]
+                }]
+            };
+
+            if (systemPrompt) {
+                requestBody.systemInstruction = {
+                    parts: [{ text: systemPrompt }]
+                };
+            }
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            });
+
+            if (!response.ok) {
+                const errJson = await response.json();
+                throw new Error(errJson.error ? errJson.error.message : response.statusText);
+            }
+
+            const data = await response.json();
+            if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+                const replyText = data.candidates[0].content.parts.map(p => p.text).join(' ');
+                log(`[Gemini 回答] ${replyText}`, 'success');
+                await speakText(replyText);
+            }
+        }
+
+        function speakText(text) {
+            return new Promise((resolve) => {
+                if (!('speechSynthesis' in window)) {
+                    resolve();
+                    return;
+                }
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'zh-TW';
+                utterance.rate = 1.0;
+
+                utterance.onstart = () => {
+                    setAvatarState('speaking');
+                };
+
+                utterance.onend = () => {
+                    setAvatarState(isListeningRest ? 'listening' : 'idle');
+                    resolve();
+                };
+
+                utterance.onerror = () => {
+                    setAvatarState(isListeningRest ? 'listening' : 'idle');
+                    resolve();
+                };
+
+                window.speechSynthesis.speak(utterance);
+            });
+        }
+
+        // --- WebSocket 模式 ---
+        async function startWebSocketConversation(apiKey, modelName, apiVersion) {
+            setStatus('連線中，請求麥克風權限...', 'connecting');
+            setAvatarState('thinking');
+            log('正在請求麥克風權限...', 'info');
+
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                recordingContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+                
+                const cleanModel = modelName.startsWith('models/') ? modelName : `models/${modelName}`;
+                const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${apiVersion}.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+                const systemPrompt = document.getElementById('systemPrompt').value.trim();
+                log(`正在連線 WebSocket Live API (${apiVersion} / ${cleanModel})...`, 'info');
+
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {
+                    setStatus('已連線 WebSocket，等待伺服器 Setup 確認...', 'connecting');
+                    log('WebSocket 連線成功，傳送 setup 訊息...', 'info');
+
+                    const setupPayload = {
+                        model: cleanModel,
+                        generationConfig: {
+                            responseModalities: ["AUDIO"]
+                        }
+                    };
+
+                    if (systemPrompt) {
+                        setupPayload.systemInstruction = {
+                            parts: [{ text: systemPrompt }]
+                        };
+                    }
+
+                    const setupMessage = { setup: setupPayload };
+                    ws.send(JSON.stringify(setupMessage));
+                };
+
+                ws.onmessage = async (event) => {
+                    let messageText = event.data;
+                    if (event.data instanceof Blob) {
+                        messageText = await event.data.text();
+                    }
+
+                    try {
+                        const response = JSON.parse(messageText);
+                        if (response.setupComplete) {
+                            isSetupReady = true;
+                            setStatus('Live 連線成功！請開始說話...', 'connected');
+                            setAvatarState('listening');
+                            log('伺服器回傳 setupComplete，對話就緒！', 'success');
+                            return;
+                        }
+                        handleServerMessage(response);
+                    } catch (e) {
+                        console.error('解析訊息失敗:', e);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    log('WebSocket 發生錯誤！', 'error');
+                };
+
+                ws.onclose = (event) => {
+                    isSetupReady = false;
+                    setStatus(`連線中斷 (${event.code})`, 'error');
+                    setAvatarState('idle');
+                    let tip = event.reason || '';
+                    if (event.code === 1008) {
+                        tip += ' (免費版 API Key 未開通 bidi 雙向連線權限，請切換至上方的【REST 智能語音對話】模式)';
+                    }
+                    log(`WebSocket 已關閉 (Code: ${event.code}) ${tip}`, 'error');
+                    stopSession();
+                };
+            } catch (err) {
+                setStatus('無法存取麥克風', 'error');
+                log(`麥克風錯誤: ${err.message}`, 'error');
+                stopSession();
+            }
+        }
+
+        function handleServerMessage(response) {
+            if (response.serverContent && response.serverContent.modelTurn) {
+                const parts = response.serverContent.modelTurn.parts;
+                for (const part of parts) {
+                    if (part.inlineData && part.inlineData.data) {
+                        playPCM16Audio(part.inlineData.data);
+                    }
+                }
+            }
+        }
+
+        async function playPCM16Audio(base64String) {
+            if (!audioContext) return;
+            setAvatarState('speaking');
+            const binaryString = window.atob(base64String);
+            const length = binaryString.length;
+            const bytes = new Uint8Array(length);
+            for (let i = 0; i < length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            const int16Array = new Int16Array(bytes.buffer);
+            const float32Array = new Float32Array(int16Array.length);
+            for (let i = 0; i < int16Array.length; i++) {
+                float32Array[i] = int16Array[i] / 32768.0;
+            }
+            const audioBuffer = audioContext.createBuffer(1, float32Array.length, 24000);
+            audioBuffer.getChannelData(0).set(float32Array);
+            const source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+            source.start();
+
+            source.onended = () => {
+                if (currentAvatarState === 'speaking') {
+                    setAvatarState('listening');
+                }
+            };
+        }
+
+        function stopSession() {
+            isListeningRest = false;
+            isSetupReady = false;
+            setAvatarState('idle');
+
+            if (recognition) {
+                try { recognition.stop(); } catch(e){}
+                recognition = null;
+            }
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            if (processor) {
+                processor.disconnect();
+                processor = null;
+            }
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            if (recordingContext) {
+                recordingContext.close();
+                recordingContext = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+            }
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            if (!statusIndicator.classList.contains('error')) {
+                setStatus('對話已停止', '');
+            }
+        }
+    </script>
+</body>
+</html>
