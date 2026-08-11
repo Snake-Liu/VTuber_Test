@@ -486,6 +486,16 @@
         </div>
 
         <div class="form-group">
+            <label for="lipSyncOffset">嘴型與聲音同步延遲微調 (Lip-Sync Delay Offset)：</label>
+            <select id="lipSyncOffset">
+                <option value="0">0 ms (本機喇叭無延遲)</option>
+                <option value="50" selected>50 ms (標準建議預設 ✅)</option>
+                <option value="120">120 ms (藍芽耳機 A2DP 延遲補償 🎧)</option>
+                <option value="200">200 ms (高延遲藍芽耳機對齊 🎧)</option>
+            </select>
+        </div>
+
+        <div class="form-group">
             <label for="systemPrompt">VTuber 人設與說話風格 (System Prompt)：</label>
             <input type="text" id="systemPrompt" value="你是一位精簡俐落的極簡靈魂臉譜助手。請用繁體中文回答，說話要簡潔生動、直奔主題、絕不廢話，每次回答控制在一到兩句話 (30字以內)！" placeholder="請設定 Gemini 人設或說話規範">
         </div>
@@ -514,7 +524,8 @@
         let recognition = null;
         let isListeningRest = false;
         let isSetupReady = false;
-        let lipSyncTimer = null;
+        let mouthCloseTimer = null;
+        let pcmAnimId = null;
 
         const startButton = document.getElementById('startButton');
         const stopButton = document.getElementById('stopButton');
@@ -651,7 +662,6 @@
                     avatarStatusBadge.innerText = '說話中 (SPEAKING 🗣️)';
                     leftEyebrow.setAttribute('d', 'M 42 70 Q 65 60 88 70');
                     rightEyebrow.setAttribute('d', 'M 112 70 Q 135 60 158 70');
-                    startLipSync();
                     break;
             }
         }
@@ -684,21 +694,31 @@
             }
         }, 50);
 
-        // 即時對嘴模擬 (Lip-Sync Engine)
-        function startLipSync() {
-            stopLipSync();
-            let phase = 0;
-            lipSyncTimer = setInterval(() => {
-                phase += 0.45;
-                const openH = Math.abs(Math.sin(phase)) * 22 + 4;
+        // 精準音節音界觸發嘴形脈衝 (Syllable Boundary Lip-Sync)
+        function triggerSyllableMouthPulse(duration = 150) {
+            const offsetDelay = parseInt(document.getElementById('lipSyncOffset')?.value || '50');
+            
+            setTimeout(() => {
+                const openH = Math.random() * 20 + 8;
                 avatarMouth.setAttribute('d', `M 76 134 Q 100 ${134 + openH} 124 134 Z`);
-            }, 70);
+                
+                if (mouthCloseTimer) clearTimeout(mouthCloseTimer);
+                mouthCloseTimer = setTimeout(() => {
+                    if (currentAvatarState === 'speaking') {
+                        avatarMouth.setAttribute('d', 'M 76 136 Q 100 142 124 136');
+                    }
+                }, duration);
+            }, offsetDelay);
         }
 
         function stopLipSync() {
-            if (lipSyncTimer) {
-                clearInterval(lipSyncTimer);
-                lipSyncTimer = null;
+            if (mouthCloseTimer) {
+                clearTimeout(mouthCloseTimer);
+                mouthCloseTimer = null;
+            }
+            if (pcmAnimId) {
+                cancelAnimationFrame(pcmAnimId);
+                pcmAnimId = null;
             }
             avatarMouth.setAttribute('d', 'M 76 136 Q 100 152 124 136');
         }
@@ -876,12 +896,19 @@
                     setAvatarState('speaking');
                 };
 
+                // 原生發音單字邊界事件 (Word / Syllable Boundary Synchronization)
+                utterance.onboundary = (event) => {
+                    triggerSyllableMouthPulse(160);
+                };
+
                 utterance.onend = () => {
+                    stopLipSync();
                     setAvatarState(isListeningRest ? 'listening' : 'idle');
                     resolve();
                 };
 
                 utterance.onerror = () => {
+                    stopLipSync();
                     setAvatarState(isListeningRest ? 'listening' : 'idle');
                     resolve();
                 };
@@ -890,14 +917,25 @@
             });
         }
 
-        // --- WebSocket 模式 ---
+        // --- WebSocket 模式 (包含手機藍芽耳機 SCO 優化與聲波音量即時對嘴) ---
         async function startWebSocketConversation(apiKey, modelName, apiVersion) {
             setStatus('連線中，請求麥克風權限...', 'connecting');
             setAvatarState('thinking');
-            log('正在請求麥克風權限...', 'info');
+            log('正在請求麥克風權限 (包含手機藍芽耳機設定)...', 'info');
 
             try {
-                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // 手機藍芽耳機麥克風優化設定 (Bluetooth HFP/SCO constraint)
+                const audioConstraints = {
+                    audio: {
+                        echoCancellation: { ideal: true },
+                        noiseSuppression: { ideal: true },
+                        autoGainControl: { ideal: true },
+                        channelCount: { ideal: 1 },
+                        sampleRate: { ideal: 16000 }
+                    }
+                };
+
+                stream = await navigator.mediaDevices.getUserMedia(audioConstraints);
                 recordingContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                 audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
                 
@@ -983,6 +1021,7 @@
             }
         }
 
+        // 聲波即時分析音量對嘴 (Audio Analyser Real-time Lip Sync)
         async function playPCM16Audio(base64String) {
             if (!audioContext) return;
             setAvatarState('speaking');
@@ -999,12 +1038,43 @@
             }
             const audioBuffer = audioContext.createBuffer(1, float32Array.length, 24000);
             audioBuffer.getChannelData(0).set(float32Array);
+            
             const source = audioContext.createBufferSource();
             source.buffer = audioBuffer;
-            source.connect(audioContext.destination);
-            source.start();
+
+            // 建立 Web Audio 實時音量分析節點
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            analyser.connect(audioContext.destination);
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            const offset = parseInt(document.getElementById('lipSyncOffset')?.value || '50');
+
+            source.start(audioContext.currentTime + (offset / 1000));
+
+            function updateMouthFromAudioVolume() {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i];
+                }
+                const avgVolume = sum / dataArray.length; // 0 ~ 255
+                const openH = Math.min(26, (avgVolume / 45) * 22 + 4);
+                avatarMouth.setAttribute('d', `M 76 134 Q 100 ${134 + openH} 124 134 Z`);
+
+                if (currentAvatarState === 'speaking') {
+                    pcmAnimId = requestAnimationFrame(updateMouthFromAudioVolume);
+                }
+            }
+
+            updateMouthFromAudioVolume();
 
             source.onended = () => {
+                if (pcmAnimId) {
+                    cancelAnimationFrame(pcmAnimId);
+                    pcmAnimId = null;
+                }
                 if (currentAvatarState === 'speaking') {
                     setAvatarState('listening');
                 }
@@ -1014,6 +1084,7 @@
         function stopSession() {
             isListeningRest = false;
             isSetupReady = false;
+            stopLipSync();
             setAvatarState('idle');
 
             if (recognition) {
